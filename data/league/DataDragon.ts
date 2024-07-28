@@ -97,21 +97,15 @@ class DataDragon {
         champion.splashImg = `${this.state.getCDN()}/img/champion/splash/${champion.id}_0.jpg`;
         // champion.splashCenteredImg = `https://cdn.communitydragon.org/${this.state.getVersion()}/champion/${champion.id}/splash-art/centered`;
         // Data Dragon CDN broken workaround
-        const champion_skins_url = `https://raw.communitydragon.org/${this.state.getMajorMinorVersion()}/plugins/rcp-be-lol-game-data/global/default/v1/champion-splashes/${champion.key}/${champion.key}`
-        champion.splashCenteredImg = `${champion_skins_url}000.jpg`;
+        const champion_slug = champion.name.toLowerCase().replace(/[^a-zA-Z]+/g, '');
+        const champion_skins_url = `https://raw.communitydragon.org/${this.state.getMajorMinorVersion()}/plugins/rcp-be-lol-game-data/global/default/assets/characters/${champion_slug}/skins/`
+        champion.splashCenteredImg = `${champion_skins_url}base/images/${champion_slug}_splash_centered_0.jpg`;
         champion.squareImg = `${this.state.getVersionCDN()}/img/champion/${champion.id}.png`;
         champion.loadingImg = `${this.state.getCDN()}/img/champion/loading/${champion.id}_0.jpg`;
-        champion.skins = champion.skins?.map((skin: any) => {
-            if (skin.num < 10) {
-                skin.num = `00${skin.num}`
-            } else if (skin.num < 100) {
-                skin.num = `0${skin.num}`
-            }
-            return {
-                url: `${champion_skins_url}${skin.num}.jpg`,
+        champion.skins = champion.skins?.map((skin: any) => ({
+                url: skin.num==0?champion.splashCenteredImg : `${champion_skins_url}skin${skin.num<10?`0${skin.num}`:skin.num}/images/${champion_slug}_splash_centered_${skin.num}.jpg`,
                 id: skin.num.toString()
-            };
-        }) || []
+            })) || []
         return champion;
     }
     extendChampionLocal(champion: Champion, skin_id?: number): Champion {
@@ -122,18 +116,12 @@ class DataDragon {
         champion.skins?.forEach((skin: any) => {
             // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
             if (skin_id && skin_id > 0 && skin.id == skin_id.toString()) {
-                let tmpSkinNum = skin.num
-                if (skin.num < 10) {
-                    tmpSkinNum = `00${skin.num}`
-                } else if (skin.num < 100) {
-                    tmpSkinNum = `0${skin.num}`
-                }
-                champion.splashCenteredImg = `/cache/${this.versions.n.champion}/champion/${champion.id}_SKIN_${tmpSkinNum}.jpg`
+                champion.splashCenteredImg = `/cache/${this.versions.n.champion}/champion/${champion.id}_SKIN_${skin.num}.jpg`
                 if(skin.name!=='default') champion.name = skin.name
             }
         })
         if(champion.splashCenteredImg===undefined){
-            champion.splashCenteredImg = `/cache/${this.versions.n.champion}/champion/${champion.id}_SKIN_000.jpg`
+            champion.splashCenteredImg = `/cache/${this.versions.n.champion}/champion/${champion.id}_SKIN_0.jpg`
         }
         return champion;
     }
