@@ -14,7 +14,7 @@ export default interface DataProviderService extends EventEmitter {
 }
 
 export const getDataProvider = (): DataProviderService => {
-  if (GlobalContext.commandLine.data && GlobalContext.commandLine.data.startsWith('../recordings/')) {
+  if (GlobalContext.commandLine.data) {
     const recordingFile = GlobalContext.commandLine.data;
     log.info(`Using recording as data provider service: ${recordingFile}`);
     log.warn('THIS IS PROBABLY MEANT FOR TESTING USAGE AND SHOULD ONLY BE USED IN PRODUCTION, IF YOU KNOW WHAT YOU ARE DOING!');

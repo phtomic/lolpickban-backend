@@ -23,6 +23,7 @@ GlobalContext.commandLine = {
   experimentalConnector: argv['experimentalConnector'],
   debug: argv['debug'],
 };
+
 if (GlobalContext.commandLine.debug) {
   setLogLevel('debug');
 }
@@ -50,7 +51,7 @@ const main = async (): Promise<void> => {
   await ddragon.init();
 
   const server = http.createServer(app);
-  app.use('/cache', express.static(__dirname + '/../cache'));
+  app.use('/cache', express.static(__dirname + '/cache'));
   const wsServer = new WebSocketServer(server, state);
   wsServer.startHeartbeat();
 

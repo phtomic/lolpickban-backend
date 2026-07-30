@@ -2,7 +2,7 @@
 import needle from 'needle';
 import * as fs from 'fs';
 import cliProgress from 'cli-progress';
-import path from 'path';
+import path, { join } from 'path';
 import logger from '../../logging';
 import { Champion, Spell } from '../../types/dto';
 import State from '../../state';
@@ -117,6 +117,9 @@ class DataDragon {
             // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
             if (skin_id && skin_id > 0 && skin.id == skin_id.toString()) {
                 champion.splashCenteredImg = `/cache/${this.versions.n.champion}/champion/${champion.id}_SKIN_${skin.num}.jpg`
+                if (!fs.existsSync(join(process.cwd(), champion.splashCenteredImg))){
+                    champion.splashCenteredImg = `/cache/${this.versions.n.champion}/champion/${champion.id}_SKIN_0.jpg`
+                }
                 if(skin.name!=='default') champion.name = skin.name
             }
         })
@@ -165,57 +168,103 @@ class DataDragon {
 
         log.info('Download process started. This could take a while. Downloading to: ' + patchFolder);
 
-        const downloadFile = (targetUrl: string, targetPath: string) => (): Promise<void> => new Promise<void>((resolve, reject): void => {
-            needle('get', targetUrl, {
-                // eslint-disable-next-line @typescript-eslint/camelcase
-                open_timeout: 0
-            })
-                .then(function (resp) {
-                    const out = fs.createWriteStream(targetPath);
-                    out.write(resp.raw);
-                    out.close();
-                    resolve();
-                })
-                .catch(function (err) {
-                    reject(err);
-                });
-        });
+        const MAX_RETRIES = 3;
+        const CONCURRENCY = 15;
 
-        const tasks: Array<() => Promise<void>> = [];
+        interface DownloadTask {
+            url: string;
+            path: string;
+            retries: number;
+        }
+
+        const downloadFile = async (task: DownloadTask): Promise<void> => {
+            const resp = await needle('get', task.url, {
+                // eslint-disable-next-line @typescript-eslint/camelcase
+                open_timeout: 10000,
+                // eslint-disable-next-line @typescript-eslint/camelcase
+                read_timeout: 30000
+            });
+            if(resp.statusCode !== 200) return;
+            const out = fs.createWriteStream(task.path);
+            out.write(resp.raw);
+            out.close();
+        };
+
+        const taskQueue: DownloadTask[] = [];
 
         this.champions.forEach(champion => {
             champion = this.extendChampion(champion);
-            tasks.push(downloadFile(champion.loadingImg, `${patchFolderChampion}/${champion.id}_loading.jpg`));
-            tasks.push(downloadFile(champion.splashImg, `${patchFolderChampion}/${champion.id}_splash.jpg`));
-            tasks.push(downloadFile(champion.splashCenteredImg, `${patchFolderChampion}/${champion.id}_centered_splash.jpg`));
-            tasks.push(downloadFile(champion.squareImg, `${patchFolderChampion}/${champion.id}_square.png`));
+            taskQueue.push({ url: champion.loadingImg, path: `${patchFolderChampion}/${champion.id}_loading.jpg`, retries: 0 });
+            taskQueue.push({ url: champion.splashImg, path: `${patchFolderChampion}/${champion.id}_splash.jpg`, retries: 0 });
+            taskQueue.push({ url: champion.splashCenteredImg, path: `${patchFolderChampion}/${champion.id}_centered_splash.jpg`, retries: 0 });
+            taskQueue.push({ url: champion.squareImg, path: `${patchFolderChampion}/${champion.id}_square.png`, retries: 0 });
             champion.skins?.forEach(skin => {
-                tasks.push(downloadFile(skin.url, `${patchFolderChampion}/${champion.id}_SKIN_${skin.id}.jpg`))
-            })
+                taskQueue.push({ url: skin.url, path: `${patchFolderChampion}/${champion.id}_SKIN_${skin.id}.jpg`, retries: 0 });
+            });
         });
 
         this.summonerSpells.forEach(spell => {
             spell = this.extendSummonerSpell(spell);
-            tasks.push(downloadFile(spell.icon, `${patchFolderSpell}/${spell.id}.png`));
+            taskQueue.push({ url: spell.icon, path: `${patchFolderSpell}/${spell.id}.png`, retries: 0 });
         });
 
-        log.info(`Downloading ${tasks.length} assets from datadragon!`);
-        const batchSize = 10;
+        const totalTasks = taskQueue.length;
+        log.info(`Downloading ${totalTasks} assets from datadragon!`);
 
         const bar = new cliProgress.Bar({
             format: 'Downloading assets [{bar}] {percentage}% | ETA: {eta}s | {value}/{total}'
         });
 
-        bar.start(tasks.length, 0);
-        for (let i = 0; i < tasks.length; i = i + batchSize) {
-            const currentTasks = tasks.slice(i, i + batchSize);
+        let completed = 0;
+        const failedTasks: Array<{ url: string; error: string }> = [];
 
-            await Promise.all(currentTasks.map(task => task()));
-            bar.update(i + 1);
+        // Worker pool: each worker pulls tasks from the shared queue
+        const runWorker = async (): Promise<void> => {
+            while (taskQueue.length > 0) {
+                const task = taskQueue.shift();
+                if (!task) break;
+
+                try {
+                    await downloadFile(task);
+                    completed++;
+                    bar.update(completed);
+                } catch (err) {
+                    const errorMsg = (err as any)?.message || String(err);
+                    if (task.retries < MAX_RETRIES) {
+                        // Re-queue with incremented retry count
+                        const delay = Math.pow(2, task.retries) * 500; // 500ms, 1s, 2s
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        task.retries++;
+                        taskQueue.push(task); // Back to the queue
+                        log.debug(`Retry ${task.retries}/${MAX_RETRIES} for: ${path.basename(task.path)}`);
+                    } else {
+                        // Exhausted retries — log and move on
+                        completed++;
+                        bar.update(completed);
+                        failedTasks.push({ url: task.url, error: errorMsg });
+                        log.warn(`Failed after ${MAX_RETRIES} retries: ${path.basename(task.path)}`);
+                    }
+                }
+            }
+        };
+
+        bar.start(totalTasks, 0);
+
+        // Launch concurrent workers
+        const workers: Promise<void>[] = [];
+        for (let i = 0; i < CONCURRENCY; i++) {
+            workers.push(runWorker());
         }
+        await Promise.all(workers);
+
         bar.stop();
 
-        log.info(`Downloading ${tasks.length} assets finished.`);
+        if (failedTasks.length > 0) {
+            log.warn(`${failedTasks.length} assets failed to download after ${MAX_RETRIES} retries.`);
+            failedTasks.forEach(f => log.debug(`  Failed: ${f.url} — ${f.error}`));
+        }
+
+        log.info(`Download complete: ${totalTasks - failedTasks.length}/${totalTasks} assets downloaded successfully.`);
     }
 }
 
