@@ -18,6 +18,7 @@ import DataDragon from './data/league/DataDragon';
 import Controller from './state/Controller';
 import GlobalContext from './GlobalContext';
 import AutoRecorder from './recording/AutoRecorder';
+import DiscoveryServer from './discovery/DiscoveryServer';
 import './Console';
 
 const argv = minimist(process.argv.slice(2));
@@ -47,34 +48,7 @@ log.info(' | |__| (_) | |___  |  __/ (_>  < |_) | | |_| || | ');
 log.info(' |_____\\___/|_____| |_|   \\___/\\/____/   \\___/|___|');
 
 log.debug('Logging in debug mode!');
-log.info('Configuration: ' + JSON.stringify({ ...GlobalContext.commandLine, ingestSecret: '***' }));
-
-// ─── JWT middleware for /ingest ──────────────────────────────────────────────
-
-const verifyIngestToken = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
-  const secret = GlobalContext.commandLine.ingestSecret;
-  if (!secret) {
-    // No secret configured — allow all (development mode)
-    log.warn('INGEST_SECRET not configured. /ingest endpoint is UNPROTECTED!');
-    next();
-    return;
-  }
-
-  const authHeader = req.headers['authorization'];
-  if (!authHeader?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing Authorization header' });
-    return;
-  }
-
-  const token = authHeader.slice(7);
-  try {
-    jwt.verify(token, secret);
-    next();
-  } catch (err) {
-    log.warn(`JWT verification failed: ${err}`);
-    res.status(403).json({ error: 'Invalid or expired token' });
-  }
-};
+log.info('Configuration: ' + JSON.stringify(GlobalContext.commandLine));
 
 // ─── Setup ──────────────────────────────────────────────────────────────────
 
@@ -106,7 +80,7 @@ const remoteProvider = dataProvider instanceof RemoteDataProviderService
   ? (dataProvider as RemoteDataProviderService)
   : null;
 
-app.post('/ingest', verifyIngestToken, (req, res) => {
+app.post('/ingest', (req, res) => {
   if (!remoteProvider) {
     res.status(409).json({ error: 'Backend is not running in remote mode. Start without --localConnector or --data flags.' });
     return;
@@ -131,7 +105,7 @@ app.post('/ingest', verifyIngestToken, (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-app.post('/ingest/connection', verifyIngestToken, (req, res) => {
+app.post('/ingest/connection', (req, res) => {
   if (!remoteProvider) {
     res.status(409).json({ error: 'Not in remote mode.' });
     return;
@@ -146,6 +120,10 @@ app.post('/ingest/connection', verifyIngestToken, (req, res) => {
 const main = async (): Promise<void> => {
   await ddragon.init();
 
+  const port = Number(process.env.PORT) || 8999;
+  const discoveryServer = new DiscoveryServer(port);
+  discoveryServer.start();
+
   const server = http.createServer(app);
   app.use('/cache', express.static(__dirname + '/cache'));
   const wsServer = new WebSocketServer(server, state);
@@ -153,7 +131,7 @@ const main = async (): Promise<void> => {
 
   tickManager.startLoop();
 
-  server.listen(process.env.PORT || 8999, () => {
+  server.listen(port, () => {
     if (server.address() === null) {
       return log.error('Failed to start server.');
     }

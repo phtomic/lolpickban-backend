@@ -6,7 +6,7 @@ class GlobalContext {
     experimentalConnector: boolean;
     localConnector: boolean;
     debug: boolean;
-    ingestSecret: string;
+    ingestSecret?: string;
   } = {
     data: '',
     record: '',
